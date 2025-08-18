@@ -17,7 +17,7 @@ export const QLM_FIELDS = [
   "Psychiatric Treatment", 
   "Dental Copayment",
   "Maternity Copayment", 
-  "Optical Copayment'
+  "Optical Copayment"
 ];
 
 export const ALKOOT_FIELDS = [
