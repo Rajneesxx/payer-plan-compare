@@ -6,49 +6,33 @@ export const PAYER_PLANS = {
 export type PayerPlan = keyof typeof PAYER_PLANS;
 
 export const QLM_FIELDS = [
-  'Patient Name',
-  'Patient ID',
-  'Date of Birth',
-  'Gender',
-  'Insurance Provider',
-  'Policy Number',
-  'Group Number',
-  'Member ID',
-  'Primary Care Physician',
-  'Specialist',
-  'Date of Service',
-  'Procedure Code',
-  'Diagnosis Code',
-  'Treatment Description',
-  'Total Amount',
-  'Copay Amount',
-  'Deductible',
-  'Coinsurance',
-  'Prior Authorization',
-  'Claim Number'
+  "Insured", 
+  "Policy No",
+  "Period of Insurance", 
+  "Plan", 
+  "For Eligible Medical Expenses at Al Ahli Hospital",
+  "Inpatient Deductible", 
+  "Deductible per each outpatient consultation",
+  "Vaccination of children", 
+  "Psychiatric Treatment", 
+  "Dental Copayment",
+  "Maternity Copayment", 
+  "Optical Copayment'
 ];
 
 export const ALKOOT_FIELDS = [
-  'Beneficiary Name',
-  'National ID',
-  'Civil ID',
-  'Date of Birth',
-  'Gender',
-  'Nationality',
-  'Employer',
-  'Employment Date',
-  'Department',
-  'Position',
-  'Salary',
-  'Benefits Package',
-  'Medical Coverage',
-  'Family Members',
-  'Emergency Contact',
-  'Address',
-  'Phone Number',
-  'Email',
-  'Bank Account',
-  'Status'
+  "Policy Number", 
+  "Category", 
+  "Effective Date",
+  "Expiry Date", 
+  "Provider-specific co-insurance at Al Ahli Hospital",
+  "Co-insurance on all inpatient treatment", 
+  "Deductible on consultation",
+  "Vaccination & Immunization",
+  "Psychiatric treatment & Psychotherapy",
+  "Pregnancy & Childbirth", 
+  "Dental Benefit", 
+  "Optical Benefit"
 ];
 
 export const FIELD_MAPPINGS = {
