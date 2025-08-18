@@ -8,35 +8,81 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
-
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
-
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
-
-    --radius: 0.5rem;
+    /* Core backgrounds and surfaces */
+    --background: 248 250 252;
+    --foreground: 213 21% 23%;
+    
+    --card: 255 255 255;
+    --card-foreground: 213 21% 23%;
+    
+    --popover: 255 255 255;
+    --popover-foreground: 213 21% 23%;
+    
+    /* Brand and primary colors - Professional blue palette */
+    --primary: 213 84% 53%;
+    --primary-foreground: 255 255 255;
+    --primary-hover: 213 84% 48%;
+    --primary-light: 213 84% 95%;
+    
+    /* Secondary - Subtle grays */
+    --secondary: 220 16% 96%;
+    --secondary-foreground: 213 21% 23%;
+    --secondary-hover: 220 16% 91%;
+    
+    /* Muted elements */
+    --muted: 220 16% 96%;
+    --muted-foreground: 213 13% 52%;
+    
+    /* Accent - Highlight color */
+    --accent: 49 100% 58%;
+    --accent-foreground: 213 21% 23%;
+    --accent-light: 49 100% 95%;
+    
+    /* Status colors */
+    --success: 142 71% 45%;
+    --success-foreground: 255 255 255;
+    --success-light: 142 71% 95%;
+    
+    --warning: 38 92% 50%;
+    --warning-foreground: 255 255 255;
+    --warning-light: 38 92% 95%;
+    
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 255 255 255;
+    --destructive-light: 0 84% 95%;
+    
+    /* Comparison highlighting */
+    --diff-added: 142 71% 95%;
+    --diff-removed: 0 84% 95%;
+    --diff-changed: 49 100% 95%;
+    
+    /* Borders and inputs */
+    --border: 220 16% 90%;
+    --input: 220 16% 96%;
+    --ring: 213 84% 53%;
+    
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(213 84% 53%), hsl(213 84% 65%));
+    --gradient-surface: linear-gradient(180deg, hsl(248 250 252), hsl(248 250 252));
+    --gradient-card: linear-gradient(180deg, hsl(255 255 255), hsl(248 250 252));
+    
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 hsl(213 21% 23% / 0.05);
+    --shadow-md: 0 4px 6px -1px hsl(213 21% 23% / 0.1), 0 2px 4px -1px hsl(213 21% 23% / 0.06);
+    --shadow-lg: 0 10px 15px -3px hsl(213 21% 23% / 0.1), 0 4px 6px -2px hsl(213 21% 23% / 0.05);
+    --shadow-primary: 0 4px 14px 0 hsl(213 84% 53% / 0.25);
+    
+    /* Typography scale */
+    --text-xs: 0.75rem;
+    --text-sm: 0.875rem;
+    --text-base: 1rem;
+    --text-lg: 1.125rem;
+    --text-xl: 1.25rem;
+    --text-2xl: 1.5rem;
+    --text-3xl: 1.875rem;
+    
+    /* Spacing and sizing */
+    --radius: 0.75rem;
 
     --sidebar-background: 0 0% 98%;
 
