@@ -132,7 +132,7 @@ Rules:
 Fields to extract (keys must match exactly):
 ${fieldList}`;
 
-  // Using /v1/chat/completions endpoint
+  // Using /v1/chat/completions endpoint without temperature
   let res;
   try {
     res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -149,7 +149,6 @@ ${fieldList}`;
             content: prompt,
           },
         ],
-        temperature: 0,
       }),
     });
   } catch (error) {
