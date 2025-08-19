@@ -22,30 +22,26 @@ async function callOpenAIWithPDF({
 }): Promise<Record<string, unknown>> {
   const base64Data = await fileToBase64(file);
   const fieldList = fields.map((f) => `- ${f}`).join("\n");
-  
-  const messages = [
+
+  // Build a concise, strict instruction for JSON-only extraction
+  const prompt = `You are a precise information extraction engine.\n\nTask: Extract ONLY the following fields from the attached PDF.\nRules:\n- Output STRICT JSON only (no prose).\n- Keys must match exactly.\n- If a field is not clearly present, use null.\n- Do not invent data.\n- Preserve units/punctuation when present.\n\nFields to extract (keys must match exactly):\n${fieldList}`;
+
+  // Prefer the Responses API which supports multimodal inputs including PDFs
+  const input = [
     {
-      role: "system" as const,
-      content: `You are a precise information extraction engine.\n\nTask: Extract the following fields from the provided PDF document.\nRules:\n- Return JSON only (no prose).\n- Use EXACT keys from the field list.\n- If a field is not clearly present, set its value to null.\n- Prefer the most explicit value near labels and tables.\n- Do not invent data.\n- Normalize whitespace.\n- Keep units and punctuation from the source where applicable.`
-    },
-    {
-      role: "user" as const,
+      role: "user",
       content: [
+        { type: "input_text", text: prompt },
         {
-          type: "text",
-          text: `Fields to extract (keys must match exactly):\n${fieldList}\n\nPlease analyze the attached PDF document and extract the specified fields.`
+          type: "input_image",
+          // Many models accept PDFs as a data URL via the multimodal input payload
+          image_url: { url: `data:${file.type};base64,${base64Data}` },
         },
-        {
-          type: "image_url",
-          image_url: {
-            url: `data:application/pdf;base64,${base64Data}`
-          }
-        }
-      ]
-    }
+      ],
+    },
   ];
 
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -53,19 +49,43 @@ async function callOpenAIWithPDF({
     },
     body: JSON.stringify({
       model: "gpt-4o",
+      input,
       temperature: 0,
       response_format: { type: "json_object" },
-      messages,
     }),
   });
 
   if (!res.ok) {
     const errText = await res.text();
+    // Surface a clearer error when the API rejects the MIME type
+    if (/mime|mimetype|image_url|unsupported/i.test(errText)) {
+      throw new Error(
+        "OpenAI rejected the file format. Ensure you're uploading a valid PDF and your model supports PDF inputs."
+      );
+    }
     throw new Error(errText || "OpenAI request failed");
   }
 
   const data = await res.json();
-  const content: string = data?.choices?.[0]?.message?.content ?? "{}";
+
+  // Try multiple shapes (Responses API and fallback to Chat Completions-like)
+  let content = "{}";
+  // Responses API common shapes
+  if (Array.isArray(data?.output_text) && data.output_text.length > 0) {
+    content = data.output_text[0];
+  } else if (typeof data?.output_text === "string") {
+    content = data.output_text;
+  } else if (Array.isArray(data?.content)) {
+    const textPart = data.content.find((c: any) => c.type === "output_text" || c.type === "text");
+    if (textPart?.text) content = textPart.text;
+  } else if (Array.isArray(data?.output)) {
+    const textPart = data.output?.[0]?.content?.find((c: any) => c.type === "output_text" || c.type === "text");
+    if (textPart?.text) content = textPart.text;
+  } else if (data?.choices?.[0]?.message?.content) {
+    // Fallback to chat.completions shape
+    content = data.choices[0].message.content;
+  }
+
   try {
     return JSON.parse(content);
   } catch {
