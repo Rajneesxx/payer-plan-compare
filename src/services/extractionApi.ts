@@ -84,6 +84,10 @@ async function callOpenAIWithPDF({
   file: File;
   fields: string[];
 }): Promise<Record<string, unknown>> {
+  if (!apiKey || !apiKey.startsWith('sk-')) {
+    throw new Error('Invalid API key: Please provide a valid OpenAI API key starting with "sk-". You can generate one at https://platform.openai.com/account/api-keys');
+  }
+
   if (!file.type.includes('pdf')) {
     throw new Error('Invalid file type: Only PDF files are supported');
   }
@@ -110,7 +114,7 @@ async function callOpenAIWithPDF({
 
   const prompt = `You are a precise information extraction engine.
 
-Task: Extract ONLY the following fields from the attached PDF document.
+Task: Extract ONLY the following fields from the attached PDF document with ID ${fileId}.
 Rules:
 - Output STRICT JSON only (no prose or explanations)
 - Keys must match exactly as listed below
@@ -122,7 +126,7 @@ Rules:
 Fields to extract (keys must match exactly):
 ${fieldList}`;
 
-  // Using /v1/chat/completions endpoint
+  // Using /v1/chat/completions endpoint without attachments at root level
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -137,7 +141,6 @@ ${fieldList}`;
           content: prompt,
         },
       ],
-      attachments: [{ file_id: fileId, tools: [{ type: "file_search" }] }], // Adjusted for file attachment
       temperature: 0,
     }),
   });
@@ -156,7 +159,6 @@ ${fieldList}`;
     throw new Error('Invalid document: Failed to parse extracted data from PDF');
   }
 }
-
 export async function extractDataApi({
   file,
   payerPlan,
