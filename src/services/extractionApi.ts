@@ -138,7 +138,9 @@ async function callOpenAIWithPDF({
     const errorText = await res.text();
     console.log("Responses API Error Details:", errorText);
     if (/file_search|attachment|tool|responses|chat\.completions|content\s*type/i.test(errorText)) {
-      throw new Error('Processing failed: Request format was rejected by OpenAI (responses + attachments).');
+      // Fallback to Assistants v2 flow when Responses+attachments is rejected
+      const fallbackContent = await runAssistantsV2Fallback({ apiKey, fileId, prompt: combinedPrompt });
+      return JSON.parse(fallbackContent);
     }
     if (/size|limit|exceed/i.test(errorText)) {
       throw new Error('Invalid document: File size exceeds OpenAI limits.');
@@ -178,6 +180,138 @@ async function callOpenAIWithPDF({
   } catch (error) {
     throw new Error(`Invalid document: Failed to parse extracted data from PDF: ${(error as Error).message}`);
   }
+}
+
+async function runAssistantsV2Fallback({
+  apiKey,
+  fileId,
+  prompt,
+}: {
+  apiKey: string;
+  fileId: string;
+  prompt: string;
+}): Promise<string> {
+  const baseHeaders = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${apiKey}`,
+    'OpenAI-Beta': 'assistants=v2',
+  } as const;
+
+  // 1) Create a vector store
+  const vsRes = await fetch('https://api.openai.com/v1/vector_stores', {
+    method: 'POST',
+    headers: baseHeaders,
+    body: JSON.stringify({ name: 'pdf-vs-temp' }),
+  });
+  if (!vsRes.ok) {
+    const t = await vsRes.text();
+    throw new Error(`OpenAI vector store error: ${t}`);
+  }
+  const vectorStore = await vsRes.json();
+  const vectorStoreId = vectorStore.id;
+
+  // 2) Attach file to vector store
+  const vsFileRes = await fetch(`https://api.openai.com/v1/vector_stores/${vectorStoreId}/files`, {
+    method: 'POST',
+    headers: baseHeaders,
+    body: JSON.stringify({ file_id: fileId }),
+  });
+  if (!vsFileRes.ok) {
+    const t = await vsFileRes.text();
+    throw new Error(`OpenAI vector store file error: ${t}`);
+  }
+
+  // 3) Create assistant configured with file_search
+  const asstRes = await fetch('https://api.openai.com/v1/assistants', {
+    method: 'POST',
+    headers: baseHeaders,
+    body: JSON.stringify({
+      model: 'gpt-4o',
+      tools: [{ type: 'file_search' }],
+      tool_resources: { file_search: { vector_store_ids: [vectorStoreId] } },
+      instructions: 'Return JSON only.'
+    }),
+  });
+  if (!asstRes.ok) {
+    const t = await asstRes.text();
+    throw new Error(`OpenAI assistant create error: ${t}`);
+  }
+  const assistant = await asstRes.json();
+  const assistantId = assistant.id;
+
+  // 4) Create a thread with the prompt
+  const threadRes = await fetch('https://api.openai.com/v1/threads', {
+    method: 'POST',
+    headers: baseHeaders,
+    body: JSON.stringify({
+      messages: [
+        { role: 'user', content: prompt },
+      ],
+    }),
+  });
+  if (!threadRes.ok) {
+    const t = await threadRes.text();
+    throw new Error(`OpenAI thread create error: ${t}`);
+  }
+  const thread = await threadRes.json();
+  const threadId = thread.id;
+
+  // 5) Create a run
+  const runRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs`, {
+    method: 'POST',
+    headers: baseHeaders,
+    body: JSON.stringify({ assistant_id: assistantId }),
+  });
+  if (!runRes.ok) {
+    const t = await runRes.text();
+    throw new Error(`OpenAI run create error: ${t}`);
+  }
+  const run = await runRes.json();
+  const runId = run.id;
+
+  // 6) Poll run status
+  const deadline = Date.now() + 60_000; // 60s
+  while (true) {
+    const getRun = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs/${runId}`, {
+      headers: baseHeaders,
+    });
+    if (!getRun.ok) {
+      const t = await getRun.text();
+      throw new Error(`OpenAI run status error: ${t}`);
+    }
+    const runStatus = await getRun.json();
+    if (runStatus.status === 'completed') break;
+    if (runStatus.status === 'failed' || runStatus.status === 'expired' || runStatus.status === 'cancelled') {
+      throw new Error(`OpenAI run failed: ${JSON.stringify(runStatus)}`);
+    }
+    if (Date.now() > deadline) {
+      throw new Error('OpenAI run timed out.');
+    }
+    await new Promise(r => setTimeout(r, 1500));
+  }
+
+  // 7) Fetch assistant messages and return the latest assistant text content
+  const msgRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages?order=desc&limit=5`, {
+    headers: baseHeaders,
+  });
+  if (!msgRes.ok) {
+    const t = await msgRes.text();
+    throw new Error(`OpenAI messages fetch error: ${t}`);
+  }
+  const msgList = await msgRes.json();
+  const firstAssistant = (msgList.data || []).find((m: any) => m.role === 'assistant');
+  if (!firstAssistant) {
+    throw new Error('No assistant message returned.');
+  }
+  // Concatenate text parts
+  let out = '';
+  for (const block of firstAssistant.content || []) {
+    if (block.type === 'text') {
+      const v = block.text?.value ?? '';
+      out += v;
+    }
+  }
+  return out || '{}';
 }
 
 export async function extractDataApi({
@@ -223,7 +357,9 @@ export async function compareDataApi({
   apiKey: string;
 }): Promise<ComparisonResult[]> {
   // Validate file types early
-  if (!file1.type.includes('pdf') || !file2.type.includes('pdf')) {
+  const isPdf1 = file1.type.toLowerCase().includes('pdf') || /\.pdf$/i.test(file1.name);
+  const isPdf2 = file2.type.toLowerCase().includes('pdf') || /\.pdf$/i.test(file2.name);
+  if (!isPdf1 || !isPdf2) {
     throw new Error('Invalid file type: Both files must be PDFs');
   }
 
