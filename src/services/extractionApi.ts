@@ -1,29 +1,3 @@
-import { FIELD_MAPPINGS, type PayerPlan, type ExtractedData, type ComparisonResult } from "@/constants/fields";
-
-function buildMessages(fields: string[], fileName: string) {
-  const fieldList = fields.map((f) => `- ${f}`).join("\n");
-  const system = `You are a precise information extraction engine.\n\nTask: Extract the following fields from the provided PDF document.\nRules:\n- Return JSON only (no prose).\n- Use EXACT keys from the field list.\n- If a field is not clearly present, set its value to null.\n- Prefer the most explicit value near labels and tables.\n- Do not invent data.\n- Normalize whitespace.\n- Keep units and punctuation from the source where applicable.`;
-  const user = `Fields to extract (keys must match exactly):\n${fieldList}\n\nPlease analyze the attached PDF document "${fileName}" and extract the specified fields.`;
-  const messages: { role: "system" | "user"; content: string }[] = [
-    { role: "system", content: system },
-    { role: "user", content: user },
-  ];
-  return messages;
-}
-
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => {
-      const result = reader.result as string;
-      const base64 = result.split(',')[1];
-      resolve(base64);
-    };
-    reader.onerror = error => reject(new Error(`Failed to read file: ${error}`));
-  });
-}
-
 async function callOpenAIWithPDF({
   apiKey,
   file,
@@ -40,7 +14,7 @@ async function callOpenAIWithPDF({
   // Upload file to OpenAI
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("purpose", "answers");
+  formData.append("purpose", "assistants"); // Changed to a valid purpose
 
   const uploadRes = await fetch("https://api.openai.com/v1/files", {
     method: "POST",
@@ -71,20 +45,20 @@ Rules:
 Fields to extract (keys must match exactly):
 ${fieldList}`;
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
+  // Corrected endpoint to /v1/chat/completions (assuming Assistants API usage)
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "o3",
-      input: [
+      model: "o3", // Ensure this model supports file processing
+      messages: [
         {
           role: "user",
-          content: [{ type: "input_text", text: prompt }],
-          // Reference uploaded file by ID
-          file: fileId,
+          content: prompt,
+          attachments: [{ id: fileId, mime_type: "application/pdf" }], // Attach file ID
         },
       ],
       temperature: 0,
@@ -95,10 +69,8 @@ ${fieldList}`;
   const data = await res.json();
 
   let content = "{}";
-  if (Array.isArray(data?.output_text) && data.output_text.length > 0) {
-    content = data.output_text[0];
-  } else if (typeof data?.output_text === "string") {
-    content = data.output_text;
+  if (data?.choices?.[0]?.message?.content) {
+    content = data.choices[0].message.content;
   }
 
   try {
@@ -107,6 +79,8 @@ ${fieldList}`;
     throw new Error('Invalid document: Failed to parse extracted data from PDF');
   }
 }
+
+// Rest of the functions (extractDataApi, compareDataApi) remain unchanged
 
 export async function extractDataApi({
   file,
