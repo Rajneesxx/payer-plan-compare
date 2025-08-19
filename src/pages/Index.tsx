@@ -137,7 +137,7 @@ const Index = () => {
                   <Input
                     id="openai-key"
                     type="password"
-                    placeholder="Enter your OpenAI API key"
+                    placeholder="Enter your Rapid-Secret key"
                     value={openAiKey}
                     onChange={(e) => setOpenAiKey(e.target.value)}
                     className="w-full bg-card border-border shadow-sm"
