@@ -51,15 +51,18 @@ async function callOpenAIWithPDF({
     throw new Error('Invalid file type: Only PDF files are supported');
   }
 
-  // Basic file integrity check
+  // Basic file integrity and size check
   const arrayBuffer = await file.arrayBuffer();
   if (arrayBuffer.byteLength === 0) {
     throw new Error('Invalid document: The PDF file is empty.');
   }
+  if (file.size > 100 * 1024 * 1024) { // 100 MB limit
+    throw new Error('Invalid document: File size exceeds 100 MB limit.');
+  }
 
   // Upload file to OpenAI
   const formData = new FormData();
-  formData.append("file", file);
+  formData.append("file", file, file.name);
   formData.append("purpose", "assistants");
 
   let uploadRes;
@@ -75,6 +78,16 @@ async function callOpenAIWithPDF({
 
   if (!uploadRes.ok) {
     const errorText = await uploadRes.text();
+    console.log("Upload Error Details:", errorText); // Debug log
+    if (/size|limit|exceeded/i.test(errorText)) {
+      throw new Error('Invalid document: File size exceeds OpenAI limits.');
+    }
+    if (/unsupported|mime|format/i.test(errorText)) {
+      throw new Error('Invalid file format: OpenAI does not support this PDF format.');
+    }
+    if (/corrupt|invalid|document/i.test(errorText)) {
+      throw new Error('Invalid document: The PDF file appears to be corrupted or unreadable.');
+    }
     throw new Error(`File upload failed: ${errorText}`);
   }
 
@@ -124,6 +137,7 @@ async function callOpenAIWithPDF({
 
   if (!res.ok) {
     const errorText = await res.text();
+    console.log("Chat Completion Error Details:", errorText); // Debug log
     if (/mime|mimetype|image_url|unsupported/i.test(errorText)) {
       throw new Error('Invalid file type: OpenAI rejected the file format. Only PDF files are supported');
     }
