@@ -48,10 +48,10 @@ async function callOpenAIWithPDF({
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "gpt-4o",
+      model: "o3",
       input,
       temperature: 0,
-      response_format: { type: "json_object" },
+      text: { format: "json_object" },
     }),
   });
 
