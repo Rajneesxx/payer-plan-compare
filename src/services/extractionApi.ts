@@ -46,13 +46,21 @@ async function callOpenAIWithPDF({
   file: File;
   fields: string[];
 }): Promise<Record<string, unknown>> {
-  // Validate file type
-  if (!file.type.includes('pdf')) {
+  // Validate file type (accept content-type or .pdf extension)
+  const isPdfLike = file.type.toLowerCase().includes('pdf') || /\.pdf$/i.test(file.name);
+  if (!isPdfLike) {
     throw new Error('Invalid file type: Only PDF files are supported');
   }
 
   // Basic file integrity and size check
   const arrayBuffer = await file.arrayBuffer();
+  // Quick magic header check: PDFs begin with %PDF
+  const bytes = new Uint8Array(arrayBuffer.slice(0, 4));
+  const header = String.fromCharCode(...bytes);
+  if (header !== '%PDF') {
+    // Not fatal for some generators, but helps catch renamed files
+    console.warn('File header is not %PDF; proceeding but may fail downstream');
+  }
   if (arrayBuffer.byteLength === 0) {
     throw new Error('Invalid document: The PDF file is empty.');
   }
@@ -97,60 +105,62 @@ async function callOpenAIWithPDF({
   // Construct messages using buildMessages
   const messages = buildMessages(fields, file.name);
 
-  // Call OpenAI API with file attachment
+  // Call OpenAI API using Responses API with file_search tool
+  // Build a single user prompt string from the system + user messages
+  const combinedPrompt = `${messages.map(m => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n")}\n\nAnalyze the attached PDF document and extract the specified fields. If the PDF is unreadable or corrupted, return an empty JSON object {}.`;
+
   let res;
   try {
-    res = await fetch("https://api.openai.com/v1/chat/completions", {
+    res = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
-        model: "gpt-4o", // Using gpt-4o for robust PDF text and OCR capabilities
-        messages: [
-          ...messages,
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `Analyze the attached PDF document with file ID ${fileId} and extract the specified fields. If the PDF is unreadable or corrupted, return an empty JSON object {}.`,
-              },
-              {
-                type: "document",
-                document: {
-                  file_id: fileId,
-                  mime_type: "application/pdf",
-                },
-              },
-            ],
-          },
+        model: "gpt-4o-mini",
+        input: combinedPrompt,
+        attachments: [
+          { file_id: fileId, tools: [{ type: "file_search" }] },
         ],
-        response_format: { type: "json_object" }, // Enforce JSON output
-        max_tokens: 1500, // Increased to handle complex PDFs
+        tools: [{ type: "file_search" }],
+        response_format: { type: "json_object" },
+        temperature: 0,
+        max_output_tokens: 1500,
       }),
     });
   } catch (error) {
-    throw new Error(`Network error during chat completion: ${(error as Error).message}`);
+    throw new Error(`Network error during PDF processing: ${(error as Error).message}`);
   }
 
   if (!res.ok) {
     const errorText = await res.text();
-    console.log("Chat Completion Error Details:", errorText); // Debug log
-    if (/mime|mimetype|image_url|unsupported/i.test(errorText)) {
-      throw new Error('Invalid file type: OpenAI rejected the file format. Only PDF files are supported');
+    console.log("Responses API Error Details:", errorText);
+    if (/file_search|attachment|tool|responses|chat\.completions|content\s*type/i.test(errorText)) {
+      throw new Error('Processing failed: Request format was rejected by OpenAI (responses + attachments).');
     }
-    if (/invalid|corrupt|document/i.test(errorText)) {
-      throw new Error('Invalid document: The PDF file appears to be corrupted or unreadable');
+    if (/size|limit|exceed/i.test(errorText)) {
+      throw new Error('Invalid document: File size exceeds OpenAI limits.');
     }
-    throw new Error(`Chat completion failed: ${errorText}`);
+    if (/unsupported|mime|mimetype|format/i.test(errorText)) {
+      throw new Error('Invalid file format: The uploaded file is not a valid PDF.');
+    }
+    throw new Error(`OpenAI PDF processing failed: ${errorText}`);
   }
 
   const data = await res.json();
 
+  // Try multiple shapes as OpenAI Responses API evolves
   let content = "{}";
-  if (data?.choices?.[0]?.message?.content) {
+  if (typeof data?.output_text === "string" && data.output_text.trim()) {
+    content = data.output_text;
+  } else if (data?.output?.[0]?.content?.[0]?.text?.value) {
+    content = data.output[0].content[0].text.value;
+  } else if (data?.output?.[0]?.content?.[0]?.text) {
+    content = data.output[0].content[0].text;
+  } else if (data?.choices?.[0]?.message?.content) {
+    // Fallback if API returns chat-completions-like shape
     content = data.choices[0].message.content;
   }
 
@@ -180,7 +190,8 @@ export async function extractDataApi({
   apiKey: string;
 }): Promise<ExtractedData> {
   // Validate file type early
-  if (!file.type.includes('pdf')) {
+  const isPdfLike = file.type.toLowerCase().includes('pdf') || /\.pdf$/i.test(file.name);
+  if (!isPdfLike) {
     throw new Error('Invalid file type: Only PDF files are supported');
   }
 

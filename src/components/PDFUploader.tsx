@@ -26,14 +26,15 @@ export const PDFUploader = ({ mode, onModeChange, onFilesChange, files, isLoadin
     }
   }, []);
 
+  const isPdfLike = (file: File) =>
+    file.type.toLowerCase().includes('pdf') || /\.pdf$/i.test(file.name);
+
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
 
-    const droppedFiles = Array.from(e.dataTransfer.files).filter(
-      file => file.type === 'application/pdf'
-    );
+    const droppedFiles = Array.from(e.dataTransfer.files).filter(isPdfLike);
 
     if (droppedFiles.length > 0) {
       const maxFiles = mode === 'single' ? 1 : 2;
@@ -42,9 +43,7 @@ export const PDFUploader = ({ mode, onModeChange, onFilesChange, files, isLoadin
   }, [mode, onFilesChange]);
 
   const handleFileInput = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const selectedFiles = Array.from(e.target.files || []).filter(
-      file => file.type === 'application/pdf'
-    );
+    const selectedFiles = Array.from(e.target.files || []).filter(isPdfLike);
 
     if (selectedFiles.length > 0) {
       const maxFiles = mode === 'single' ? 1 : 2;
