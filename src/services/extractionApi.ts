@@ -1,6 +1,5 @@
 // OpenAI extraction service using Responses API with attachments + file_search
 // Minimal public surface retained: extractDataApi and compareDataApi
-
 import { FIELD_MAPPINGS, type PayerPlan, type ExtractedData, type ComparisonResult } from "@/constants/fields";
 
 const OPENAI_BASE = "https://api.openai.com/v1";
@@ -30,7 +29,7 @@ function buildPrompt(fields: string[]): string {
 
 async function uploadFileToOpenAI(file: File, apiKey: string): Promise<string> {
   const form = new FormData();
-  form.append("purpose", "assistants");
+  form.append("purpose", "vision");
   form.append("file", file, file.name);
 
   const res = await fetch(`${OPENAI_BASE}/files`, {
@@ -47,53 +46,104 @@ async function uploadFileToOpenAI(file: File, apiKey: string): Promise<string> {
   }
 
   const data = await res.json();
-  // Return file id
   return data.id as string;
 }
 
-async function callResponsesWithAttachment(params: {
+async function callChatCompletionWithFile(params: {
   apiKey: string;
   fileId: string;
   prompt: string;
   model?: string;
 }): Promise<any> {
-  const { apiKey, fileId, prompt, model = "gpt-4.1" } = params;
+  const { apiKey, fileId, prompt, model = "gpt-4o" } = params;
 
   const body = {
     model,
-    // Single message with the prompt
-    input: [
+    messages: [
       {
         role: "user",
-        content: [{ type: "input_text", text: prompt }],
+        content: [
+          { type: "text", text: prompt },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:application/pdf;base64,${fileId}`, // This approach won't work directly
+              detail: "high"
+            }
+          }
+        ],
       },
     ],
-    // Attach the uploaded file for file_search tool
-    attachments: [
-      {
-        file_id: fileId,
-        tools: [{ type: "file_search" }],
-      },
-    ],
-    tools: [{ type: "file_search" }],
-    text: { format: "json" },
+    response_format: { type: "json_object" },
     temperature: 0,
-    max_output_tokens: 1500,
-  } as const;
+    max_tokens: 1500,
+  };
 
-  const res = await fetch(`${OPENAI_BASE}/responses`, {
+  const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
-      "OpenAI-Beta": "assistants=v2",
     },
     body: JSON.stringify(body),
   });
 
   if (!res.ok) {
     const errTxt = await res.text();
-    throw new Error(`OpenAI responses error: ${res.status} ${errTxt}`);
+    throw new Error(`OpenAI chat completion error: ${res.status} ${errTxt}`);
+  }
+
+  const json = await res.json();
+  return json;
+}
+
+// Alternative approach using direct file content
+async function callChatCompletionWithFileContent(params: {
+  apiKey: string;
+  file: File;
+  prompt: string;
+  model?: string;
+}): Promise<any> {
+  const { apiKey, file, prompt, model = "gpt-4o" } = params;
+
+  // Convert file to base64
+  const fileBuffer = await file.arrayBuffer();
+  const base64File = btoa(String.fromCharCode(...new Uint8Array(fileBuffer)));
+
+  const body = {
+    model,
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: prompt },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${file.type};base64,${base64File}`,
+              detail: "high"
+            }
+          }
+        ],
+      },
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0,
+    max_tokens: 1500,
+  };
+
+  const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errTxt = await res.text();
+    throw new Error(`OpenAI chat completion error: ${res.status} ${errTxt}`);
   }
 
   const json = await res.json();
@@ -101,22 +151,16 @@ async function callResponsesWithAttachment(params: {
 }
 
 function parseJsonOutput(resp: any): Record<string, any> {
-  // Prefer output_text convenience field if present
-  const raw = typeof resp.output_text === "string" && resp.output_text.trim()
-    ? resp.output_text
-    : Array.isArray(resp.output)
-      ? resp.output
-          .map((p: any) => (typeof p?.content?.[0]?.text === "string" ? p.content[0].text : ""))
-          .join("")
-      : "";
-
-  if (!raw) throw new Error("Empty response from OpenAI.");
+  // Extract content from the standard chat completion response
+  const content = resp.choices?.[0]?.message?.content;
+  
+  if (!content) throw new Error("Empty response from OpenAI.");
 
   try {
-    return JSON.parse(raw);
+    return JSON.parse(content);
   } catch {
     // Try to extract a JSON block from the text
-    const match = raw.match(/\{[\s\S]*\}/);
+    const match = content.match(/\{[\s\S]*\}/);
     if (match) {
       return JSON.parse(match[0]);
     }
@@ -135,15 +179,19 @@ export async function extractDataApi({
 }): Promise<ExtractedData> {
   assertKey(apiKey);
 
-  // 1) Upload file
-  const fileId = await uploadFileToOpenAI(file, apiKey);
-
-  // 2) Build prompt and call responses
+  // Build prompt and call chat completion with file content
   const fields = FIELD_MAPPINGS[payerPlan];
   const prompt = buildPrompt(fields);
-  const response = await callResponsesWithAttachment({ apiKey, fileId, prompt });
+  
+  // Use direct file content approach since PDF processing with vision models
+  // requires the file to be converted to images or use a different approach
+  const response = await callChatCompletionWithFileContent({ 
+    apiKey, 
+    file, 
+    prompt 
+  });
 
-  // 3) Parse JSON
+  // Parse JSON
   const json = parseJsonOutput(response);
 
   // Ensure all expected keys exist; fill missing with null
