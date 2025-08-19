@@ -47,7 +47,7 @@ The attached file is a PDF document. Please analyze it and return the extracted 
       content: [
         { type: "input_text", text: prompt },
         {
-          type: "input_document",
+          type: "input_file",
           document: {
             data: base64Data,
             mime_type: file.type
