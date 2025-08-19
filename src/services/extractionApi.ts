@@ -55,24 +55,7 @@ function buildMessages(fields: string[], fileName: string) {
   const fieldList = fields.map((f) => `- ${f}`).join("\n");
   const system = `You are a precise information extraction engine.\n\nTask: Extract the following fields from the provided PDF document.\nRules:\n- Return JSON only (no prose).\n- Use EXACT keys from the field list.\n- If a field is not clearly present, set its value to null.\n- Prefer the most explicit value near labels and tables.\n- Do not invent data.\n- Normalize whitespace.\n- Keep units and punctuation from the source where applicable.`;
   const user = `Fields to extract (keys must match exactly):\n${fieldList}\n\nPlease analyze the attached PDF document "${fileName}" and extract the specified fields.`;
-  const messages: { role: "system" | "user"; content: string }[] = [
-    { role: "system", content: system },
-    { role: "user", content: user },
-  ];
-  return messages;
-}
-
-async function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = () => {
-      const result = reader.result as string;
-      const base64 = result.split(',')[1];
-      resolve(base64);
-    };
-    reader.onerror = error => reject(new Error(`Failed to read file: ${error}`));
-  });
+  return { system, user };
 }
 
 async function callOpenAIWithPDF({
@@ -105,7 +88,7 @@ async function callOpenAIWithPDF({
       body: formData,
     });
   } catch (error) {
-    throw new Error(`Network error during file upload: ${error.message}`);
+    throw new Error(`Network error during file upload: ${(error as Error).message}`);
   }
 
   if (!uploadRes.ok) {
@@ -116,55 +99,172 @@ async function callOpenAIWithPDF({
   const uploadedFile = await uploadRes.json();
   const fileId = uploadedFile.id;
 
-  const fieldList = fields.map((f) => `- ${f}`).join("\n");
+  // Get system and user prompts
+  const { system, user } = buildMessages(fields, file.name);
 
-  const prompt = `You are a precise information extraction engine.
-
-Task: Extract ONLY the following fields from the attached PDF document.
-Rules:
-- Output STRICT JSON only (no prose or explanations)
-- Keys must match exactly as listed below
-- If a field is not clearly present in the PDF, use null
-- Do not invent data
-- Preserve units/punctuation when present
-- Analyze the entire PDF document carefully
-
-Fields to extract (keys must match exactly):
-${fieldList}`;
-
-  // Using /v1/chat/completions endpoint without temperature
-  let res;
+  // Create assistant
+  let assistantRes;
   try {
-    res = await fetch("https://api.openai.com/v1/chat/completions", {
+    assistantRes = await fetch("https://api.openai.com/v1/assistants", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
-        model: "o3", // Assuming this is a valid model
-        messages: [
+        model: "gpt-4o",
+        name: "PDF Extractor",
+        instructions: system,
+        tools: [{ type: "file_search" }],
+      }),
+    });
+  } catch (error) {
+    throw new Error(`Network error during assistant creation: ${(error as Error).message}`);
+  }
+
+  if (!assistantRes.ok) {
+    const errorText = await assistantRes.text();
+    throw new Error(`Assistant creation failed: ${errorText}`);
+  }
+
+  const assistant = await assistantRes.json();
+  const assistantId = assistant.id;
+
+  // Create thread
+  let threadRes;
+  try {
+    threadRes = await fetch("https://api.openai.com/v1/threads", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "assistants=v2",
+      },
+    });
+  } catch (error) {
+    throw new Error(`Network error during thread creation: ${(error as Error).message}`);
+  }
+
+  if (!threadRes.ok) {
+    const errorText = await threadRes.text();
+    throw new Error(`Thread creation failed: ${errorText}`);
+  }
+
+  const thread = await threadRes.json();
+  const threadId = thread.id;
+
+  // Add message to thread with file attachment
+  let messageRes;
+  try {
+    messageRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({
+        role: "user",
+        content: user,
+        attachments: [
           {
-            role: "user",
-            content: prompt,
+            file_id: fileId,
+            tools: [{ type: "file_search" }],
           },
         ],
       }),
     });
   } catch (error) {
-    throw new Error(`Network error during chat completion: ${error.message}`);
+    throw new Error(`Network error during message creation: ${(error as Error).message}`);
   }
 
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Chat completion failed: ${errorText}`);
+  if (!messageRes.ok) {
+    const errorText = await messageRes.text();
+    throw new Error(`Message creation failed: ${errorText}`);
   }
 
-  const data = await res.json();
+  // Create run
+  let runRes;
+  try {
+    runRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "assistants=v2",
+      },
+      body: JSON.stringify({
+        assistant_id: assistantId,
+      }),
+    });
+  } catch (error) {
+    throw new Error(`Network error during run creation: ${(error as Error).message}`);
+  }
 
+  if (!runRes.ok) {
+    const errorText = await runRes.text();
+    throw new Error(`Run creation failed: ${errorText}`);
+  }
+
+  const run = await runRes.json();
+  const runId = run.id;
+
+  // Poll for run completion
+  async function pollRunStatus() {
+    while (true) {
+      let statusRes;
+      try {
+        statusRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs/${runId}`, {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "OpenAI-Beta": "assistants=v2",
+          },
+        });
+      } catch (error) {
+        throw new Error(`Network error during run polling: ${(error as Error).message}`);
+      }
+
+      if (!statusRes.ok) {
+        const errorText = await statusRes.text();
+        throw new Error(`Run polling failed: ${errorText}`);
+      }
+
+      const statusData = await statusRes.json();
+      if (statusData.status === "completed") {
+        return;
+      }
+      if (["failed", "cancelled", "expired"].includes(statusData.status)) {
+        throw new Error(`Run failed with status ${statusData.status}: ${statusData.last_error?.message || "Unknown error"}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds
+    }
+  }
+
+  await pollRunStatus();
+
+  // Get messages
+  let messagesRes;
+  try {
+    messagesRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "assistants=v2",
+      },
+    });
+  } catch (error) {
+    throw new Error(`Network error during messages retrieval: ${(error as Error).message}`);
+  }
+
+  if (!messagesRes.ok) {
+    const errorText = await messagesRes.text();
+    throw new Error(`Messages retrieval failed: ${errorText}`);
+  }
+
+  const messagesData = await messagesRes.json();
+  const assistantMessage = messagesData.data[0]; // Latest message
   let content = "{}";
-  if (data?.choices?.[0]?.message?.content) {
-    content = data.choices[0].message.content;
+  if (assistantMessage && assistantMessage.role === "assistant" && assistantMessage.content[0]?.text?.value) {
+    content = assistantMessage.content[0].text.value;
   }
 
   try {
@@ -173,6 +273,7 @@ ${fieldList}`;
     throw new Error('Invalid document: Failed to parse extracted data from PDF');
   }
 }
+
 export async function extractDataApi({
   file,
   payerPlan,
