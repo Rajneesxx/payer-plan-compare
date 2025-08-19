@@ -116,6 +116,7 @@ async function callOpenAIWithPDF({
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
         model: "gpt-4o-mini", // Supports file_search + JSON output, cost-efficient
