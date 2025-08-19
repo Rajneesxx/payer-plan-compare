@@ -67,23 +67,23 @@ async function callOpenAIWithPDF({
   file: File;
   fields: string[];
 }): Promise<Record<string, unknown>> {
-  if (!apiKey || !apiKey.startsWith('sk-')) {
-    throw new Error('Invalid API key: Please provide a valid OpenAI API key starting with "sk-". You can generate one at https://platform.openai.com/account/api-keys');
+  // Basic validations
+  if (!apiKey) {
+    throw new Error('Missing API key: Please provide your OpenAI API key.');
   }
-
   if (!file.type.includes('pdf')) {
     throw new Error('Invalid file type: Only PDF files are supported');
   }
 
-  // Upload file to OpenAI
+  // 1) Upload the actual user PDF file to OpenAI Files API
   const formData = new FormData();
-  formData.append("file", file);
-  formData.append("purpose", "assistants");
+  formData.append('purpose', 'assistants');
+  formData.append('file', file); // IMPORTANT: the user's uploaded File object
 
-  let uploadRes;
+  let uploadRes: Response;
   try {
-    uploadRes = await fetch("https://api.openai.com/v1/files", {
-      method: "POST",
+    uploadRes = await fetch('https://api.openai.com/v1/files', {
+      method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}` },
       body: formData,
     });
@@ -96,179 +96,88 @@ async function callOpenAIWithPDF({
     throw new Error(`File upload failed: ${errorText}`);
   }
 
-  const uploadedFile = await uploadRes.json();
-  const fileId = uploadedFile.id;
+  const uploaded = await uploadRes.json();
+  const fileId: string | undefined = uploaded?.id;
+  if (!fileId) {
+    throw new Error('File upload failed: missing file id from OpenAI response');
+  }
 
-  // Get system and user prompts
-  const { system, user } = buildMessages(fields, file.name);
+  // 2) Call the Responses API with the file reference and strict JSON output
+  // Build prompt content
+  const fieldList = fields.map((f) => `- ${f}`).join('\n');
+  const instruction = [
+    'You are a precise information extraction engine.',
+    'Task: Extract the following fields from the attached PDF document.',
+    'Rules:',
+    '- Return JSON only (no prose).',
+    '- Use EXACT keys from the field list.',
+    '- If a field is not clearly present, set its value to null.',
+    '- Prefer the most explicit value near labels and tables.',
+    '- Do not invent data.',
+    '- Normalize whitespace.',
+    '- Keep units and punctuation from the source where applicable.',
+  ].join('\n');
 
-  // Create assistant
-  let assistantRes;
+  const userPrompt = `Fields to extract (keys must match exactly):\n${fieldList}\n\nPlease analyze the attached PDF document "${file.name}" and extract the specified fields. Output strictly JSON only.`;
+
+  let resp: Response;
   try {
-    assistantRes = await fetch("https://api.openai.com/v1/assistants", {
-      method: "POST",
+    resp = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
-        "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
-        model: "gpt-4o",
-        name: "PDF Extractor",
-        instructions: system,
-        tools: [{ type: "file_search" }],
-      }),
-    });
-  } catch (error) {
-    throw new Error(`Network error during assistant creation: ${(error as Error).message}`);
-  }
-
-  if (!assistantRes.ok) {
-    const errorText = await assistantRes.text();
-    throw new Error(`Assistant creation failed: ${errorText}`);
-  }
-
-  const assistant = await assistantRes.json();
-  const assistantId = assistant.id;
-
-  // Create thread
-  let threadRes;
-  try {
-    threadRes = await fetch("https://api.openai.com/v1/threads", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "OpenAI-Beta": "assistants=v2",
-      },
-    });
-  } catch (error) {
-    throw new Error(`Network error during thread creation: ${(error as Error).message}`);
-  }
-
-  if (!threadRes.ok) {
-    const errorText = await threadRes.text();
-    throw new Error(`Thread creation failed: ${errorText}`);
-  }
-
-  const thread = await threadRes.json();
-  const threadId = thread.id;
-
-  // Add message to thread with file attachment
-  let messageRes;
-  try {
-    messageRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "OpenAI-Beta": "assistants=v2",
-      },
-      body: JSON.stringify({
-        role: "user",
-        content: user,
-        attachments: [
+        model: 'gpt-4.1', // Using the Responses API as requested
+        input: [
           {
-            file_id: fileId,
-            tools: [{ type: "file_search" }],
+            role: 'user',
+            content: [
+              { type: 'input_text', text: `${instruction}\n\n${userPrompt}` },
+              { type: 'input_file', file_id: fileId },
+            ],
           },
         ],
+        // Force pure JSON output
+        response_format: { type: 'json_object' },
       }),
     });
   } catch (error) {
-    throw new Error(`Network error during message creation: ${(error as Error).message}`);
+    throw new Error(`Network error during extraction: ${(error as Error).message}`);
   }
 
-  if (!messageRes.ok) {
-    const errorText = await messageRes.text();
-    throw new Error(`Message creation failed: ${errorText}`);
+  if (!resp.ok) {
+    const errorText = await resp.text();
+    throw new Error(`Extraction request failed: ${errorText}`);
   }
 
-  // Create run
-  let runRes;
-  try {
-    runRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-        "OpenAI-Beta": "assistants=v2",
-      },
-      body: JSON.stringify({
-        assistant_id: assistantId,
-      }),
-    });
-  } catch (error) {
-    throw new Error(`Network error during run creation: ${(error as Error).message}`);
-  }
+  const data = await resp.json();
 
-  if (!runRes.ok) {
-    const errorText = await runRes.text();
-    throw new Error(`Run creation failed: ${errorText}`);
-  }
+  // Prefer the convenience field if present
+  let textOutput: string | undefined = data?.output_text;
 
-  const run = await runRes.json();
-  const runId = run.id;
-
-  // Poll for run completion
-  async function pollRunStatus() {
-    while (true) {
-      let statusRes;
-      try {
-        statusRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs/${runId}`, {
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "OpenAI-Beta": "assistants=v2",
-          },
-        });
-      } catch (error) {
-        throw new Error(`Network error during run polling: ${(error as Error).message}`);
-      }
-
-      if (!statusRes.ok) {
-        const errorText = await statusRes.text();
-        throw new Error(`Run polling failed: ${errorText}`);
-      }
-
-      const statusData = await statusRes.json();
-      if (statusData.status === "completed") {
-        return;
-      }
-      if (["failed", "cancelled", "expired"].includes(statusData.status)) {
-        throw new Error(`Run failed with status ${statusData.status}: ${statusData.last_error?.message || "Unknown error"}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds
+  // Fallback: try to assemble text from the structured content if needed
+  if (!textOutput && Array.isArray(data?.output)) {
+    try {
+      const first = data.output[0];
+      const blocks = first?.content ?? [];
+      textOutput = blocks
+        .filter((b: any) => b?.type === 'output_text' || b?.type === 'text')
+        .map((b: any) => b?.text ?? b?.content ?? '')
+        .join('\n')
+        .trim();
+    } catch {
+      // ignore, we will throw a parse error below if needed
     }
   }
 
-  await pollRunStatus();
-
-  // Get messages
-  let messagesRes;
-  try {
-    messagesRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "OpenAI-Beta": "assistants=v2",
-      },
-    });
-  } catch (error) {
-    throw new Error(`Network error during messages retrieval: ${(error as Error).message}`);
-  }
-
-  if (!messagesRes.ok) {
-    const errorText = await messagesRes.text();
-    throw new Error(`Messages retrieval failed: ${errorText}`);
-  }
-
-  const messagesData = await messagesRes.json();
-  const assistantMessage = messagesData.data[0]; // Latest message
-  let content = "{}";
-  if (assistantMessage && assistantMessage.role === "assistant" && assistantMessage.content[0]?.text?.value) {
-    content = assistantMessage.content[0].text.value;
+  if (!textOutput || typeof textOutput !== 'string') {
+    throw new Error('Invalid document: No textual output received from the model');
   }
 
   try {
-    return JSON.parse(content);
+    return JSON.parse(textOutput);
   } catch {
     throw new Error('Invalid document: Failed to parse extracted data from PDF');
   }
