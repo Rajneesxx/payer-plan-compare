@@ -95,16 +95,22 @@ async function callOpenAIWithPDF({
   // Upload file to OpenAI
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("purpose", "assistants"); // Valid purpose
+  formData.append("purpose", "assistants");
 
-  const uploadRes = await fetch("https://api.openai.com/v1/files", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
-  });
+  let uploadRes;
+  try {
+    uploadRes = await fetch("https://api.openai.com/v1/files", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: formData,
+    });
+  } catch (error) {
+    throw new Error(`Network error during file upload: ${error.message}`);
+  }
 
   if (!uploadRes.ok) {
-    throw new Error(`File upload failed: ${await uploadRes.text()}`);
+    const errorText = await uploadRes.text();
+    throw new Error(`File upload failed: ${errorText}`);
   }
 
   const uploadedFile = await uploadRes.json();
@@ -126,26 +132,35 @@ Rules:
 Fields to extract (keys must match exactly):
 ${fieldList}`;
 
-  // Using /v1/chat/completions endpoint without attachments at root level
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "o3", // Assuming this is a valid model in context
-      messages: [
-        {
-          role: "user",
-          content: prompt,
-        },
-      ],
-      temperature: 0,
-    }),
-  });
+  // Using /v1/chat/completions endpoint
+  let res;
+  try {
+    res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "o3", // Assuming this is a valid model
+        messages: [
+          {
+            role: "user",
+            content: prompt,
+          },
+        ],
+        temperature: 0,
+      }),
+    });
+  } catch (error) {
+    throw new Error(`Network error during chat completion: ${error.message}`);
+  }
 
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    const errorText = await res.text();
+    throw new Error(`Chat completion failed: ${errorText}`);
+  }
+
   const data = await res.json();
 
   let content = "{}";
