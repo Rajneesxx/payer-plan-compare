@@ -2,6 +2,8 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { FileText, Zap, ArrowRight } from "lucide-react";
 import { PayerPlanSelector } from "@/components/PayerPlanSelector";
 import { PDFUploader } from "@/components/PDFUploader";
@@ -10,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import { PAYER_PLANS, FIELD_MAPPINGS, type PayerPlan, type ExtractedData, type ComparisonResult } from "@/constants/fields";
 
 const Index = () => {
+  const [openAiKey, setOpenAiKey] = useState<string>("");
   const [payerPlan, setPayerPlan] = useState<PayerPlan>(PAYER_PLANS.QLM);
   const [uploadMode, setUploadMode] = useState<'single' | 'compare'>('single');
   const [files, setFiles] = useState<File[]>([]);
@@ -130,6 +133,22 @@ const Index = () => {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="openai-key" className="text-sm font-medium text-foreground">
+                    OpenAI API Key
+                  </Label>
+                  <Input
+                    id="openai-key"
+                    type="password"
+                    placeholder="Enter your OpenAI API key"
+                    value={openAiKey}
+                    onChange={(e) => setOpenAiKey(e.target.value)}
+                    className="w-full bg-card border-border shadow-sm"
+                  />
+                </div>
+                
+                <Separator />
+                
                 <PayerPlanSelector
                   value={payerPlan}
                   onValueChange={setPayerPlan}
