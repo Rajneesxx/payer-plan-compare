@@ -112,10 +112,10 @@ const Index = () => {
             <div className="w-10 h-10 bg-gradient-primary rounded-lg flex items-center justify-center">
               <FileText className="h-6 w-6 text-white" />
             </div>
-            PDF Data Extractor
+            Rapid Extractor
           </h1>
           <p className="text-lg text-muted-foreground">
-            Extract and compare medical data from PDF documents with AI-powered analysis
+            Extract and compare medical data from PDF documents with RapidClaims.
           </p>
         </div>
 
@@ -126,7 +126,7 @@ const Index = () => {
               <CardHeader>
                 <CardTitle className="text-lg flex items-center gap-2">
                   <Zap className="h-5 w-5 text-primary" />
-                  Configuration
+                  Configuration/Requirements
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
