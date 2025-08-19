@@ -10,6 +10,7 @@ import { PDFUploader } from "@/components/PDFUploader";
 import { ExtractedDataTable } from "@/components/ExtractedDataTable";
 import { useToast } from "@/hooks/use-toast";
 import { PAYER_PLANS, FIELD_MAPPINGS, type PayerPlan, type ExtractedData, type ComparisonResult } from "@/constants/fields";
+import { extractDataApi, compareDataApi } from "@/services/extractionApi";
 
 const Index = () => {
   const [openAiKey, setOpenAiKey] = useState<string>("");
@@ -41,6 +42,15 @@ const Index = () => {
       return;
     }
 
+    if (!openAiKey) {
+      toast({
+        title: "Missing OpenAI key",
+        description: "Please enter your OpenAI API key to proceed.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsProcessing(true);
     
     try {
@@ -49,45 +59,31 @@ const Index = () => {
         description: `Extracting data from ${files.length} file${files.length > 1 ? 's' : ''}...`,
       });
 
-      // Simulate API call - Replace with actual Supabase Edge Function call
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      
-      const fields = FIELD_MAPPINGS[payerPlan];
-      
       if (uploadMode === 'single') {
-        // Mock single file extraction
-        const mockData: ExtractedData = {};
-        fields.forEach((field, index) => {
-          // Simulate some found and some missing fields
-          mockData[field] = index % 3 === 0 ? null : `Sample ${field} Value`;
+        const data = await extractDataApi({
+          file: files[0],
+          payerPlan,
+          apiKey: openAiKey,
         });
-        
-        setExtractedData(mockData);
+
+        setExtractedData(data);
         setComparisonResults(null);
-        
+
         toast({
           title: "Extraction completed",
           description: `Successfully extracted data from ${files[0].name}`,
         });
       } else {
-        // Mock comparison results
-        const mockComparison: ComparisonResult[] = fields.map((field, index) => {
-          const scenarios = ['same', 'different', 'missing'] as const;
-          const status = scenarios[index % 3];
-          
-          return {
-            field,
-            file1Value: status === 'missing' ? null : `File 1 ${field} Value`,
-            file2Value: status === 'missing' ? null : 
-                       status === 'different' ? `File 2 Different ${field} Value` : 
-                       `File 1 ${field} Value`,
-            status
-          };
+        const results = await compareDataApi({
+          file1: files[0],
+          file2: files[1],
+          payerPlan,
+          apiKey: openAiKey,
         });
-        
-        setComparisonResults(mockComparison);
+
+        setComparisonResults(results);
         setExtractedData(null);
-        
+
         toast({
           title: "Comparison completed",
           description: `Successfully compared ${files[0].name} and ${files[1].name}`,
