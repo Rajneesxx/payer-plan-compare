@@ -46,13 +46,21 @@ async function callOpenAIWithPDF({
   file: File;
   fields: string[];
 }): Promise<Record<string, unknown>> {
-  // Validate file type
-  if (!file.type.includes('pdf')) {
+  // Validate file type (accept content-type or .pdf extension)
+  const isPdfLike = file.type.toLowerCase().includes('pdf') || /\.pdf$/i.test(file.name);
+  if (!isPdfLike) {
     throw new Error('Invalid file type: Only PDF files are supported');
   }
 
   // Basic file integrity and size check
   const arrayBuffer = await file.arrayBuffer();
+  // Quick magic header check: PDFs begin with %PDF
+  const bytes = new Uint8Array(arrayBuffer.slice(0, 4));
+  const header = String.fromCharCode(...bytes);
+  if (header !== '%PDF') {
+    // Not fatal for some generators, but helps catch renamed files
+    console.warn('File header is not %PDF; proceeding but may fail downstream');
+  }
   if (arrayBuffer.byteLength === 0) {
     throw new Error('Invalid document: The PDF file is empty.');
   }
@@ -136,7 +144,7 @@ async function callOpenAIWithPDF({
     const errorText = await res.text();
     console.log("Responses API Error Details:", errorText);
     if (/file_search|attachment|tool|responses|chat\.completions|content\s*type/i.test(errorText)) {
-      throw new Error('Processing failed: Request format not accepted by OpenAI. The app has been updated to use the correct PDF flow; please retry.');
+      throw new Error('Processing failed: The service rejected the request format. Please update and retry.');
     }
     if (/size|limit|exceed/i.test(errorText)) {
       throw new Error('Invalid document: File size exceeds OpenAI limits.');
@@ -188,7 +196,8 @@ export async function extractDataApi({
   apiKey: string;
 }): Promise<ExtractedData> {
   // Validate file type early
-  if (!file.type.includes('pdf')) {
+  const isPdfLike = file.type.toLowerCase().includes('pdf') || /\.pdf$/i.test(file.name);
+  if (!isPdfLike) {
     throw new Error('Invalid file type: Only PDF files are supported');
   }
 
