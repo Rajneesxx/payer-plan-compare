@@ -119,17 +119,10 @@ async function callOpenAIWithPDF({
         "OpenAI-Beta": "assistants=v2",
       },
       body: JSON.stringify({
-        model: "gpt-4o-mini", // Supports file_search + JSON output, cost-efficient
-        input: [
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: combinedPrompt },
-            ],
-            attachments: [
-              { file_id: fileId, tools: [{ type: "file_search" }] },
-            ],
-          },
+        model: "gpt-4o-mini",
+        input: combinedPrompt,
+        attachments: [
+          { file_id: fileId, tools: [{ type: "file_search" }] },
         ],
         tools: [{ type: "file_search" }],
         response_format: { type: "json_object" },
@@ -145,7 +138,7 @@ async function callOpenAIWithPDF({
     const errorText = await res.text();
     console.log("Responses API Error Details:", errorText);
     if (/file_search|attachment|tool|responses|chat\.completions|content\s*type/i.test(errorText)) {
-      throw new Error('Processing failed: The service rejected the request format. Please update and retry.');
+      throw new Error('Processing failed: Request format was rejected by OpenAI (responses + attachments).');
     }
     if (/size|limit|exceed/i.test(errorText)) {
       throw new Error('Invalid document: File size exceeds OpenAI limits.');
