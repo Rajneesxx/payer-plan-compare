@@ -2,7 +2,20 @@ import { FIELD_MAPPINGS, type PayerPlan, type ExtractedData, type ComparisonResu
 
 function buildMessages(fields: string[], fileName: string) {
   const fieldList = fields.map((f) => `- ${f}`).join("\n");
-  const system = `You are a precise information extraction engine.\n\nTask: Extract the following fields from the provided PDF document.\nRules:\n- Return JSON only (no prose).\n- Use EXACT keys from the field list.\n- If a field is not clearly present, set its value to null.\n- Prefer the most explicit value near labels and tables.\n- Do not invent data.\n- Normalize whitespace.\n- Keep units and punctuation from the source where applicable.`;
+  const system = `You are a precise information extraction engine capable of processing PDF documents, including text-based and scanned PDFs with OCR.
+
+Task: Extract the following fields from the provided PDF document.
+Rules:
+- Return JSON only (no prose or explanations).
+- Use EXACT keys from the field list below.
+- If a field is not clearly present in the document, set its value to null.
+- Prefer the most explicit value near labels, tables, or key-value pairs.
+- Do not invent data.
+- Normalize whitespace and remove unnecessary line breaks.
+- Preserve units, punctuation, and formatting from the source where applicable.
+- If the PDF is scanned, use OCR to extract text accurately.
+- Search the entire document, including headers, footers, and tables.
+- If the document is unreadable or corrupted, return an empty JSON object {}.`;
   const user = `Fields to extract (keys must match exactly):\n${fieldList}\n\nPlease analyze the attached PDF document "${fileName}" and extract the specified fields.`;
   const messages: { role: "system" | "user"; content: string }[] = [
     { role: "system", content: system },
@@ -38,97 +51,108 @@ async function callOpenAIWithPDF({
     throw new Error('Invalid file type: Only PDF files are supported');
   }
 
-  let base64Data: string;
-  try {
-    base64Data = await fileToBase64(file);
-  } catch (error) {
-    throw new Error(`Invalid document: Failed to process PDF file - ${error.message}`);
+  // Basic file integrity check
+  const arrayBuffer = await file.arrayBuffer();
+  if (arrayBuffer.byteLength === 0) {
+    throw new Error('Invalid document: The PDF file is empty.');
   }
 
-  const fieldList = fields.map((f) => `- ${f}`).join("\n");
+  // Upload file to OpenAI
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("purpose", "assistants");
 
-  const prompt = `You are a precise information extraction engine.
+  let uploadRes;
+  try {
+    uploadRes = await fetch("https://api.openai.com/v1/files", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: formData,
+    });
+  } catch (error) {
+    throw new Error(`Network error during file upload: ${(error as Error).message}`);
+  }
 
-Task: Extract ONLY the following fields from the attached PDF document.
-Rules:
-- Output STRICT JSON only (no prose or explanations)
-- Keys must match exactly as listed below
-- If a field is not clearly present in the PDF, use null
-- Do not invent data
-- Preserve units/punctuation when present
-- Analyze the entire PDF document carefully
-The attached file is a PDF document. Please analyze it and return the extracted data as JSON.`;
+  if (!uploadRes.ok) {
+    const errorText = await uploadRes.text();
+    throw new Error(`File upload failed: ${errorText}`);
+  }
 
-  const input = [
-    {
-      role: "user",
-      content: [
-        { type: "input_text", text: prompt },
-        {
-          type: "input_file",
-          document: {
-            data: file,
-            mime_type: 'application/pdf'
-          }
-        },
-      ],
-    },
-  ];
+  const uploadedFile = await uploadRes.json();
+  const fileId = uploadedFile.id;
 
-  const res = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: "o3",
-      input,
-      temperature: 0,
-      text: { format: "json_object" },
-    }),
-  });
+  // Construct messages using buildMessages
+  const messages = buildMessages(fields, file.name);
+
+  // Call OpenAI API with file attachment
+  let res;
+  try {
+    res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: "gpt-4o", // Using gpt-4o for robust PDF text and OCR capabilities
+        messages: [
+          ...messages,
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: `Analyze the attached PDF document with file ID ${fileId} and extract the specified fields. If the PDF is unreadable or corrupted, return an empty JSON object {}.`,
+              },
+              {
+                type: "document",
+                document: {
+                  file_id: fileId,
+                  mime_type: "application/pdf",
+                },
+              },
+            ],
+          },
+        ],
+        response_format: { type: "json_object" }, // Enforce JSON output
+        max_tokens: 1500, // Increased to handle complex PDFs
+      }),
+    });
+  } catch (error) {
+    throw new Error(`Network error during chat completion: ${(error as Error).message}`);
+  }
 
   if (!res.ok) {
-    const errText = await res.text();
-    if (/mime|mimetype|image_url|unsupported/i.test(errText)) {
+    const errorText = await res.text();
+    if (/mime|mimetype|image_url|unsupported/i.test(errorText)) {
       throw new Error('Invalid file type: OpenAI rejected the file format. Only PDF files are supported');
     }
-    if (/invalid|corrupt|document/i.test(errText)) {
+    if (/invalid|corrupt|document/i.test(errorText)) {
       throw new Error('Invalid document: The PDF file appears to be corrupted or unreadable');
     }
-    throw new Error(errText || 'OpenAI request failed');
+    throw new Error(`Chat completion failed: ${errorText}`);
   }
 
   const data = await res.json();
 
   let content = "{}";
-  if (Array.isArray(data?.output_text) && data.output_text.length > 0) {
-    content = data.output_text[0];
-  } else if (typeof data?.output_text === "string") {
-    content = data.output_text;
-  } else if (Array.isArray(data?.content)) {
-    const textPart = data.content.find((c: any) => c.type === "output_text" || c.type === "text");
-    if (textPart?.text) content = textPart.text;
-  } else if (Array.isArray(data?.output)) {
-    const textPart = data.output?.[0]?.content?.find((c: any) => c.type === "output_text" || c.type === "text");
-    if (textPart?.text) content = textPart.text;
-  } else if (data?.choices?.[0]?.message?.content) {
+  if (data?.choices?.[0]?.message?.content) {
     content = data.choices[0].message.content;
   }
 
   try {
-    return JSON.parse(content);
-  } catch {
-    const match = content.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        return JSON.parse(match[0]);
-      } catch {
-        throw new Error('Invalid document: Failed to parse extracted data from PDF');
-      }
+    const parsed = JSON.parse(content);
+    // Validate that the response is meaningful
+    if (Object.keys(parsed).length === 0) {
+      throw new Error('Invalid document: The PDF file appears to be corrupted or unreadable.');
     }
-    throw new Error('Invalid document: No valid data extracted from PDF');
+    // Check if any requested fields are present
+    if (!Object.keys(parsed).some(key => fields.includes(key))) {
+      throw new Error('No requested fields found in the document. The PDF may not contain the expected data.');
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error(`Invalid document: Failed to parse extracted data from PDF: ${(error as Error).message}`);
   }
 }
 
