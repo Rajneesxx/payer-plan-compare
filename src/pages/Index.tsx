@@ -90,9 +90,10 @@ const Index = () => {
         });
       }
     } catch (error) {
+      console.error('Extraction error:', error);
       toast({
         title: "Processing failed",
-        description: "An error occurred while processing the PDF files. Please try again.",
+        description: error instanceof Error ? error.message : "An error occurred while processing the PDF files. Please check your OpenAI API key and try again.",
         variant: "destructive",
       });
     } finally {
