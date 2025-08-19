@@ -33,17 +33,27 @@ async function callOpenAIWithPDF({
   file: File;
   fields: string[];
 }): Promise<Record<string, unknown>> {
-  // Validate file type
   if (!file.type.includes('pdf')) {
     throw new Error('Invalid file type: Only PDF files are supported');
   }
 
-  let base64Data: string;
-  try {
-    base64Data = await fileToBase64(file);
-  } catch (error) {
-    throw new Error(`Invalid document: Failed to process PDF file - ${error.message}`);
+  // Upload file to OpenAI
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("purpose", "answers");
+
+  const uploadRes = await fetch("https://api.openai.com/v1/files", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: formData,
+  });
+
+  if (!uploadRes.ok) {
+    throw new Error(`File upload failed: ${await uploadRes.text()}`);
   }
+
+  const uploadedFile = await uploadRes.json();
+  const fileId = uploadedFile.id;
 
   const fieldList = fields.map((f) => `- ${f}`).join("\n");
 
@@ -59,25 +69,7 @@ Rules:
 - Analyze the entire PDF document carefully
 
 Fields to extract (keys must match exactly):
-${fieldList}
-
-The attached file is a PDF document. Please analyze it and return the extracted data as JSON.`;
-
-  const input = [
-    {
-      role: "user",
-      content: [
-        { type: "input_text", text: prompt },
-        {
-          type: "input_file",
-          document: {
-            data: file,
-            mime_type: 'application/pdf'
-          }
-        },
-      ],
-    },
-  ];
+${fieldList}`;
 
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
@@ -87,23 +79,19 @@ The attached file is a PDF document. Please analyze it and return the extracted 
     },
     body: JSON.stringify({
       model: "o3",
-      input,
+      input: [
+        {
+          role: "user",
+          content: [{ type: "input_text", text: prompt }],
+          // Reference uploaded file by ID
+          file: fileId,
+        },
+      ],
       temperature: 0,
-      text: { format: "json_object" },
     }),
   });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    if (/mime|mimetype|image_url|unsupported/i.test(errText)) {
-      throw new Error('Invalid file type: OpenAI rejected the file format. Only PDF files are supported');
-    }
-    if (/invalid|corrupt|document/i.test(errText)) {
-        throw new Error(errText);
-    }
-    throw new Error(errText || 'OpenAI request failed');
-  }
-
+  if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
 
   let content = "{}";
@@ -111,28 +99,12 @@ The attached file is a PDF document. Please analyze it and return the extracted 
     content = data.output_text[0];
   } else if (typeof data?.output_text === "string") {
     content = data.output_text;
-  } else if (Array.isArray(data?.content)) {
-    const textPart = data.content.find((c: any) => c.type === "output_text" || c.type === "text");
-    if (textPart?.text) content = textPart.text;
-  } else if (Array.isArray(data?.output)) {
-    const textPart = data.output?.[0]?.content?.find((c: any) => c.type === "output_text" || c.type === "text");
-    if (textPart?.text) content = textPart.text;
-  } else if (data?.choices?.[0]?.message?.content) {
-    content = data.choices[0].message.content;
   }
 
   try {
     return JSON.parse(content);
   } catch {
-    const match = content.match(/\{[\s\S]*\}/);
-    if (match) {
-      try {
-        return JSON.parse(match[0]);
-      } catch {
-        throw new Error('Invalid document: Failed to parse extracted data from PDF');
-      }
-    }
-    throw new Error('Invalid document: No valid data extracted from PDF');
+    throw new Error('Invalid document: Failed to parse extracted data from PDF');
   }
 }
 
