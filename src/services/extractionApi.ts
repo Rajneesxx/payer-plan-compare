@@ -24,18 +24,34 @@ async function callOpenAIWithPDF({
   const fieldList = fields.map((f) => `- ${f}`).join("\n");
 
   // Build a concise, strict instruction for JSON-only extraction
-  const prompt = `You are a precise information extraction engine.\n\nTask: Extract ONLY the following fields from the attached PDF.\nRules:\n- Output STRICT JSON only (no prose).\n- Keys must match exactly.\n- If a field is not clearly present, use null.\n- Do not invent data.\n- Preserve units/punctuation when present.\n\nFields to extract (keys must match exactly):\n${fieldList}`;
+  const prompt = `You are a precise information extraction engine.
 
-  // Prefer the Responses API which supports multimodal inputs including PDFs
+Task: Extract ONLY the following fields from the attached PDF document.
+Rules:
+- Output STRICT JSON only (no prose or explanations)
+- Keys must match exactly as listed below
+- If a field is not clearly present in the PDF, use null
+- Do not invent data
+- Preserve units/punctuation when present
+- Analyze the entire PDF document carefully
+
+Fields to extract (keys must match exactly):
+${fieldList}
+
+The attached file is a PDF document. Please analyze it and return the extracted data as JSON.`;
+
+  // Use the correct content type for PDF document
   const input = [
     {
       role: "user",
       content: [
         { type: "input_text", text: prompt },
         {
-          type: "input_image",
-          // Many models accept PDFs as a data URL via the multimodal input payload
-          image_url: { url: `data:${file.type};base64,${base64Data}` },
+          type: "input_document",
+          document: {
+            data: base64Data,
+            mime_type: file.type
+          }
         },
       ],
     },
