@@ -139,8 +139,7 @@ async function callOpenAIWithPDF({
             ],
           },
         ],
-        // Force pure JSON output per Responses API
-        modalities: ['text'],
+        // Force pure JSON output per Responses API (no 'modalities')
         text: { format: 'json' },
       }),
     });
