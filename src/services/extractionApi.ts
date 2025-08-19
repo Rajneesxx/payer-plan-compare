@@ -139,8 +139,9 @@ async function callOpenAIWithPDF({
             ],
           },
         ],
-        // Force pure JSON output
-        response_format: { type: 'json_object' },
+        // Force pure JSON output per Responses API
+        modalities: ['text'],
+        text: { format: 'json' },
       }),
     });
   } catch (error) {
