@@ -44,8 +44,8 @@ const Index = () => {
 
     if (!openAiKey) {
       toast({
-        title: "Missing OpenAI key",
-        description: "Please enter your OpenAI API key to proceed.",
+        title: "Missing Rapid-Secret key",
+        description: "Please enter your Rapid-secret key to proceed.",
         variant: "destructive",
       });
       return;
@@ -132,7 +132,7 @@ const Index = () => {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label htmlFor="openai-key" className="text-sm font-medium text-foreground">
-                    OpenAI API Key
+                    Rapid-Secret Key
                   </Label>
                   <Input
                     id="openai-key"
