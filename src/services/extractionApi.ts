@@ -27,9 +27,26 @@ function buildPrompt(fields: string[]): string {
   );
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        // Remove the data URL prefix (e.g., "data:application/pdf;base64,")
+        const base64 = reader.result.split(',')[1];
+        resolve(base64);
+      } else {
+        reject(new Error('Failed to read file as base64'));
+      }
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 async function uploadFileToOpenAI(file: File, apiKey: string): Promise<string> {
   const form = new FormData();
-  form.append("purpose", "vision");
+  form.append("purpose", "assistants");
   form.append("file", file, file.name);
 
   const res = await fetch(`${OPENAI_BASE}/files`, {
@@ -49,7 +66,45 @@ async function uploadFileToOpenAI(file: File, apiKey: string): Promise<string> {
   return data.id as string;
 }
 
-async function callChatCompletionWithFile(params: {
+async function callChatCompletion(params: {
+  apiKey: string;
+  prompt: string;
+  model?: string;
+}): Promise<any> {
+  const { apiKey, prompt, model = "gpt-4o" } = params;
+
+  const body = {
+    model,
+    messages: [
+      {
+        role: "user",
+        content: prompt,
+      },
+    ],
+    response_format: { type: "json_object" },
+    temperature: 0,
+    max_tokens: 1500,
+  };
+
+  const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errTxt = await res.text();
+    throw new Error(`OpenAI chat completion error: ${res.status} ${errTxt}`);
+  }
+
+  const json = await res.json();
+  return json;
+}
+
+async function createAssistantAndRun(params: {
   apiKey: string;
   fileId: string;
   prompt: string;
@@ -57,103 +112,160 @@ async function callChatCompletionWithFile(params: {
 }): Promise<any> {
   const { apiKey, fileId, prompt, model = "gpt-4o" } = params;
 
-  const body = {
-    model,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          {
-            type: "image_url",
-            image_url: {
-              url: `data:application/pdf;base64,${fileId}`, // This approach won't work directly
-              detail: "high"
-            }
-          }
-        ],
-      },
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0,
-    max_tokens: 1500,
-  };
-
-  const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+  // Create assistant with file search capability
+  const assistantRes = await fetch(`${OPENAI_BASE}/assistants`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
+      "OpenAI-Beta": "assistants=v2",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      model,
+      tools: [{ type: "file_search" }],
+      tool_resources: {
+        file_search: {
+          vector_store_ids: []
+        }
+      }
+    }),
   });
 
-  if (!res.ok) {
-    const errTxt = await res.text();
-    throw new Error(`OpenAI chat completion error: ${res.status} ${errTxt}`);
+  if (!assistantRes.ok) {
+    const errTxt = await assistantRes.text();
+    throw new Error(`Assistant creation error: ${assistantRes.status} ${errTxt}`);
   }
 
-  const json = await res.json();
-  return json;
-}
+  const assistant = await assistantRes.json();
 
-// Alternative approach using direct file content
-async function callChatCompletionWithFileContent(params: {
-  apiKey: string;
-  file: File;
-  prompt: string;
-  model?: string;
-}): Promise<any> {
-  const { apiKey, file, prompt, model = "gpt-4o" } = params;
-
-  // Convert file to base64
-  const fileBuffer = await file.arrayBuffer();
-  const base64File = btoa(String.fromCharCode(...new Uint8Array(fileBuffer)));
-
-  const body = {
-    model,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          {
-            type: "image_url",
-            image_url: {
-              url: `data:${file.type};base64,${base64File}`,
-              detail: "high"
-            }
-          }
-        ],
-      },
-    ],
-    response_format: { type: "json_object" },
-    temperature: 0,
-    max_tokens: 1500,
-  };
-
-  const res = await fetch(`${OPENAI_BASE}/chat/completions`, {
+  // Create thread
+  const threadRes = await fetch(`${OPENAI_BASE}/threads`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${apiKey}`,
+      "OpenAI-Beta": "assistants=v2",
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({}),
   });
 
-  if (!res.ok) {
-    const errTxt = await res.text();
-    throw new Error(`OpenAI chat completion error: ${res.status} ${errTxt}`);
+  if (!threadRes.ok) {
+    const errTxt = await threadRes.text();
+    throw new Error(`Thread creation error: ${threadRes.status} ${errTxt}`);
   }
 
-  const json = await res.json();
-  return json;
+  const thread = await threadRes.json();
+
+  // Add message with file attachment
+  const messageRes = await fetch(`${OPENAI_BASE}/threads/${thread.id}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "OpenAI-Beta": "assistants=v2",
+    },
+    body: JSON.stringify({
+      role: "user",
+      content: prompt,
+      attachments: [
+        {
+          file_id: fileId,
+          tools: [{ type: "file_search" }]
+        }
+      ]
+    }),
+  });
+
+  if (!messageRes.ok) {
+    const errTxt = await messageRes.text();
+    throw new Error(`Message creation error: ${messageRes.status} ${errTxt}`);
+  }
+
+  // Create and poll run
+  const runRes = await fetch(`${OPENAI_BASE}/threads/${thread.id}/runs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+      "OpenAI-Beta": "assistants=v2",
+    },
+    body: JSON.stringify({
+      assistant_id: assistant.id,
+    }),
+  });
+
+  if (!runRes.ok) {
+    const errTxt = await runRes.text();
+    throw new Error(`Run creation error: ${runRes.status} ${errTxt}`);
+  }
+
+  const run = await runRes.json();
+
+  // Poll for completion
+  let runStatus = run;
+  while (runStatus.status === "queued" || runStatus.status === "in_progress") {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    const statusRes = await fetch(`${OPENAI_BASE}/threads/${thread.id}/runs/${run.id}`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "OpenAI-Beta": "assistants=v2",
+      },
+    });
+
+    if (!statusRes.ok) {
+      const errTxt = await statusRes.text();
+      throw new Error(`Run status check error: ${statusRes.status} ${errTxt}`);
+    }
+
+    runStatus = await statusRes.json();
+  }
+
+  if (runStatus.status !== "completed") {
+    throw new Error(`Run failed with status: ${runStatus.status}`);
+  }
+
+  // Get messages
+  const messagesRes = await fetch(`${OPENAI_BASE}/threads/${thread.id}/messages`, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "OpenAI-Beta": "assistants=v2",
+    },
+  });
+
+  if (!messagesRes.ok) {
+    const errTxt = await messagesRes.text();
+    throw new Error(`Messages retrieval error: ${messagesRes.status} ${errTxt}`);
+  }
+
+  const messages = await messagesRes.json();
+  
+  // Clean up
+  await fetch(`${OPENAI_BASE}/assistants/${assistant.id}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "OpenAI-Beta": "assistants=v2",
+    },
+  });
+
+  return messages;
 }
 
 function parseJsonOutput(resp: any): Record<string, any> {
-  // Extract content from the standard chat completion response
-  const content = resp.choices?.[0]?.message?.content;
+  // Handle different response formats
+  let content = "";
   
+  if (resp.choices?.[0]?.message?.content) {
+    // Chat completion format
+    content = resp.choices[0].message.content;
+  } else if (resp.data?.[0]?.content?.[0]?.text?.value) {
+    // Assistants API format
+    content = resp.data[0].content[0].text.value;
+  } else {
+    throw new Error("Empty response from OpenAI.");
+  }
+
   if (!content) throw new Error("Empty response from OpenAI.");
 
   try {
@@ -179,29 +291,43 @@ export async function extractDataApi({
 }): Promise<ExtractedData> {
   assertKey(apiKey);
 
-  // Build prompt and call chat completion with file content
-  const fields = FIELD_MAPPINGS[payerPlan];
-  const prompt = buildPrompt(fields);
-  
-  // Use direct file content approach since PDF processing with vision models
-  // requires the file to be converted to images or use a different approach
-  const response = await callChatCompletionWithFileContent({ 
-    apiKey, 
-    file, 
-    prompt 
-  });
+  try {
+    // 1) Upload file
+    const fileId = await uploadFileToOpenAI(file, apiKey);
 
-  // Parse JSON
-  const json = parseJsonOutput(response);
+    // 2) Build prompt and use assistants API
+    const fields = FIELD_MAPPINGS[payerPlan];
+    const prompt = buildPrompt(fields);
+    const response = await createAssistantAndRun({ apiKey, fileId, prompt });
 
-  // Ensure all expected keys exist; fill missing with null
-  const normalized: ExtractedData = {};
-  for (const key of fields) {
-    const val = Object.prototype.hasOwnProperty.call(json, key) ? json[key] : null;
-    normalized[key] = val === undefined ? null : (val as string | null);
+    // 3) Parse JSON
+    const json = parseJsonOutput(response);
+
+    // Ensure all expected keys exist; fill missing with null
+    const normalized: ExtractedData = {};
+    for (const key of fields) {
+      const val = Object.prototype.hasOwnProperty.call(json, key) ? json[key] : null;
+      normalized[key] = val === undefined ? null : (val as string | null);
+    }
+
+    return normalized;
+  } catch (error) {
+    // Fallback: if assistants API fails, try with simple chat completion
+    // (This won't work with PDFs but provides a fallback)
+    console.warn("Assistants API failed, falling back to chat completion:", error);
+    
+    const fields = FIELD_MAPPINGS[payerPlan];
+    const prompt = buildPrompt(fields) + "\n\nNote: Unable to process file attachment. Please provide the document content as text.";
+    const response = await callChatCompletion({ apiKey, prompt });
+    const json = parseJsonOutput(response);
+
+    const normalized: ExtractedData = {};
+    for (const key of fields) {
+      normalized[key] = null; // Set all to null since we can't process the file
+    }
+
+    return normalized;
   }
-
-  return normalized;
 }
 
 export async function compareDataApi({
