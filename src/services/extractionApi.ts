@@ -105,7 +105,7 @@ async function callOpenAIWithPDF({
       body: formData,
     });
   } catch (error) {
-    throw new Error(`Network error during file upload: ${error.message}`);
+    throw new Error(`Network error during file upload: ${(error as Error).message}`);
   }
 
   if (!uploadRes.ok) {
@@ -116,23 +116,10 @@ async function callOpenAIWithPDF({
   const uploadedFile = await uploadRes.json();
   const fileId = uploadedFile.id;
 
-  const fieldList = fields.map((f) => `- ${f}`).join("\n");
+  // Construct messages using buildMessages
+  const messages = buildMessages(fields, file.name);
 
-  const prompt = `You are a precise information extraction engine.
-
-Task: Extract ONLY the following fields from the attached PDF document with ID ${fileId}.
-Rules:
-- Output STRICT JSON only (no prose or explanations)
-- Keys must match exactly as listed below
-- If a field is not clearly present in the PDF, use null
-- Do not invent data
-- Preserve units/punctuation when present
-- Analyze the entire PDF document carefully
-
-Fields to extract (keys must match exactly):
-${fieldList}`;
-
-  // Using /v1/chat/completions endpoint without temperature
+  // Call OpenAI API with file attachment
   let res;
   try {
     res = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -142,17 +129,29 @@ ${fieldList}`;
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: "o3", // Assuming this is a valid model
+        model: "gpt-4o", // Updated to a valid model that supports file attachments
         messages: [
+          ...messages,
           {
             role: "user",
-            content: prompt,
+            content: [
+              {
+                type: "text",
+                text: `Analyze the attached PDF document with file ID ${fileId} and extract the specified fields.`,
+              },
+              {
+                type: "attachment",
+                file_id: fileId,
+                mime_type: "application/pdf",
+              },
+            ],
           },
         ],
+        response_format: { type: "json_object" }, // Ensure JSON output
       }),
     });
   } catch (error) {
-    throw new Error(`Network error during chat completion: ${error.message}`);
+    throw new Error(`Network error during chat completion: ${(error as Error).message}`);
   }
 
   if (!res.ok) {
@@ -173,6 +172,7 @@ ${fieldList}`;
     throw new Error('Invalid document: Failed to parse extracted data from PDF');
   }
 }
+
 export async function extractDataApi({
   file,
   payerPlan,
