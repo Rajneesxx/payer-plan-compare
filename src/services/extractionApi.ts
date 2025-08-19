@@ -1,3 +1,80 @@
+export const PAYER_PLANS = {
+  QLM: 'QLM',
+  ALKOOT: 'ALKOOT'
+} as const;
+
+export type PayerPlan = keyof typeof PAYER_PLANS;
+
+export const QLM_FIELDS = [
+  "Insured", 
+  "Policy No",
+  "Period of Insurance", 
+  "Plan", 
+  "For Eligible Medical Expenses at Al Ahli Hospital",
+  "Inpatient Deductible", 
+  "Deductible per each outpatient consultation",
+  "Vaccination of children", 
+  "Psychiatric Treatment", 
+  "Dental Copayment",
+  "Maternity Copayment", 
+  "Optical Copayment"
+];
+
+export const ALKOOT_FIELDS = [
+  "Policy Number", 
+  "Category", 
+  "Effective Date",
+  "Expiry Date", 
+  "Provider-specific co-insurance at Al Ahli Hospital",
+  "Co-insurance on all inpatient treatment", 
+  "Deductible on consultation",
+  "Vaccination & Immunization",
+  "Psychiatric treatment & Psychotherapy",
+  "Pregnancy & Childbirth", 
+  "Dental Benefit", 
+  "Optical Benefit"
+];
+
+export const FIELD_MAPPINGS = {
+  [PAYER_PLANS.QLM]: QLM_FIELDS,
+  [PAYER_PLANS.ALKOOT]: ALKOOT_FIELDS
+};
+
+export interface ExtractedData {
+  [key: string]: string | null;
+}
+
+export interface ComparisonResult {
+  field: string;
+  file1Value: string | null;
+  file2Value: string | null;
+  status: 'same' | 'different' | 'missing';
+}
+
+function buildMessages(fields: string[], fileName: string) {
+  const fieldList = fields.map((f) => `- ${f}`).join("\n");
+  const system = `You are a precise information extraction engine.\n\nTask: Extract the following fields from the provided PDF document.\nRules:\n- Return JSON only (no prose).\n- Use EXACT keys from the field list.\n- If a field is not clearly present, set its value to null.\n- Prefer the most explicit value near labels and tables.\n- Do not invent data.\n- Normalize whitespace.\n- Keep units and punctuation from the source where applicable.`;
+  const user = `Fields to extract (keys must match exactly):\n${fieldList}\n\nPlease analyze the attached PDF document "${fileName}" and extract the specified fields.`;
+  const messages: { role: "system" | "user"; content: string }[] = [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ];
+  return messages;
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = error => reject(new Error(`Failed to read file: ${error}`));
+  });
+}
+
 async function callOpenAIWithPDF({
   apiKey,
   file,
@@ -14,7 +91,7 @@ async function callOpenAIWithPDF({
   // Upload file to OpenAI
   const formData = new FormData();
   formData.append("file", file);
-  formData.append("purpose", "assistants"); // Changed to a valid purpose
+  formData.append("purpose", "assistants"); // Valid purpose
 
   const uploadRes = await fetch("https://api.openai.com/v1/files", {
     method: "POST",
@@ -45,7 +122,7 @@ Rules:
 Fields to extract (keys must match exactly):
 ${fieldList}`;
 
-  // Corrected endpoint to /v1/chat/completions (assuming Assistants API usage)
+  // Using /v1/chat/completions endpoint
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -53,14 +130,14 @@ ${fieldList}`;
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "o3", // Ensure this model supports file processing
+      model: "o3", // Assuming this is a valid model in context
       messages: [
         {
           role: "user",
           content: prompt,
-          attachments: [{ id: fileId, mime_type: "application/pdf" }], // Attach file ID
         },
       ],
+      attachments: [{ file_id: fileId, tools: [{ type: "file_search" }] }], // Adjusted for file attachment
       temperature: 0,
     }),
   });
@@ -80,8 +157,6 @@ ${fieldList}`;
   }
 }
 
-// Rest of the functions (extractDataApi, compareDataApi) remain unchanged
-
 export async function extractDataApi({
   file,
   payerPlan,
@@ -97,6 +172,10 @@ export async function extractDataApi({
   }
 
   const fields = FIELD_MAPPINGS[payerPlan];
+  if (!fields) {
+    throw new Error(`Invalid payer plan: ${payerPlan}`);
+  }
+
   let raw: Record<string, unknown>;
   try {
     raw = await callOpenAIWithPDF({ apiKey, file, fields });
@@ -135,6 +214,10 @@ export async function compareDataApi({
     ]);
 
     const fields = FIELD_MAPPINGS[payerPlan];
+    if (!fields) {
+      throw new Error(`Invalid payer plan: ${payerPlan}`);
+    }
+
     const results: ComparisonResult[] = fields.map((field) => {
       const v1 = data1[field];
       const v2 = data2[field];
