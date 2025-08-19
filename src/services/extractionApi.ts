@@ -99,7 +99,7 @@ The attached file is a PDF document. Please analyze it and return the extracted 
       throw new Error('Invalid file type: OpenAI rejected the file format. Only PDF files are supported');
     }
     if (/invalid|corrupt|document/i.test(errText)) {
-      throw new Error('Invalid document: The PDF file appears to be corrupted or unreadable');
+        throw new Error(errText);
     }
     throw new Error(errText || 'OpenAI request failed');
   }
